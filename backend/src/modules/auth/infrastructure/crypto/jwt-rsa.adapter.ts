@@ -1,40 +1,38 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Inject,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigType } from '@nestjs/config';
 import { ITokenProvider } from '../../domain/ports/token.provider';
 import { JwtPayload } from '../../domain/types/jwt-payload.type';
+import jwtConfig from '../../../../core/config/jwt.config';
 
-/**
- * Infrastructure adapter responsible for generating cryptographic tokens.
- *
- * This class implements the ITokenProvider port using the NestJS JwtService.
- * It encapsulates the specific details of JWT generation (like RSA signing)
- * ensuring the core domain remains decoupled from the specific cryptography library.
- */
 @Injectable()
 export class JwtRsaAdapter implements ITokenProvider {
-  /**
-   * Initializes the adapter with the necessary external service.
-   *
-   * @param {JwtService} jwtService - The NestJS service configured at the module level
-   *                                  to handle JWT operations (e.g., using RSA keys).
-   */
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    @Inject(jwtConfig.KEY)
+    private readonly config: ConfigType<typeof jwtConfig>,
+  ) {}
 
-  /**
-   * Asynchronously signs the provided payload to generate a JSON Web Token.
-   *
-   * Any internal cryptographic errors are caught and re-thrown as a standard
-   * InternalServerErrorException to prevent leaking sensitive infrastructure
-   * details or stack traces to the client.
-   *
-   * @param {JwtPayload} payload - The immutable data object to be embedded within the token.
-   * @returns {Promise<string>} A promise that resolves to the generated JWT string.
-   * @throws {InternalServerErrorException} If the token signing process fails.
-   */
-  async signPayload(payload: JwtPayload): Promise<string> {
+  async signPayload(
+    payload: JwtPayload,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
     try {
-      const token = await this.jwtService.signAsync(payload);
-      return token;
+      const plainPayload = { ...payload };
+
+      const [accessToken, refreshToken] = await Promise.all([
+        this.jwtService.signAsync(plainPayload, {
+          expiresIn: this.config.accessExpiration as any,
+        }),
+        this.jwtService.signAsync(plainPayload, {
+          expiresIn: this.config.refreshExpiration as any,
+        }),
+      ]);
+
+      return { accessToken, refreshToken };
     } catch (error) {
       throw new InternalServerErrorException(
         'Error al firmar las credenciales de identidad',

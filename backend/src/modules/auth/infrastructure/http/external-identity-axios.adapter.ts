@@ -11,24 +11,11 @@ import { IExternalIdentityProvider } from '../../domain/ports/external-identity.
 import { LoginCredentials } from '../../domain/types/login-credentials.type';
 import { AuthenticatedUser } from '../../domain/types/authenticated-user.type';
 
-/**
- * Infrastructure adapter responsible for external identity validation via HTTP.
- *
- * This class implements the IExternalIdentityProvider port, acting as a driven adapter
- * in the Hexagonal Architecture. It encapsulates the complexities of network communication,
- * configuration retrieval, and error mapping when contacting the external user management system.
- */
 @Injectable()
 export class ExternalIdentityAxiosAdapter implements IExternalIdentityProvider {
   private readonly logger = new Logger(ExternalIdentityAxiosAdapter.name);
   private readonly externalAuthUrl: string;
 
-  /**
-   * Initializes the adapter and retrieves required configurations.
-   *
-   * @param {HttpService} httpService - The NestJS Axios wrapper for making HTTP requests.
-   * @param {ConfigService} configService - The NestJS service for accessing environment variables.
-   */
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
@@ -37,17 +24,6 @@ export class ExternalIdentityAxiosAdapter implements IExternalIdentityProvider {
       this.configService.get<string>('EXTERNAL_USER_SYSTEM_URL') || '';
   }
 
-  /**
-   * Validates user credentials by querying the external identity system.
-   *
-   * This method translates network responses and errors into domain-specific exceptions,
-   * ensuring that the core application remains isolated from network-level failure details.
-   *
-   * @param {LoginCredentials} credentials - The immutable object containing the user's email and password.
-   * @returns {Promise<AuthenticatedUser>} A promise that resolves to the authenticated user's basic data.
-   * @throws {InternalServerErrorException} If the external URL is not configured or if a network/server error occurs.
-   * @throws {UnauthorizedException} If the external system responds with a 401 (Unauthorized) or 404 (Not Found) status.
-   */
   async validateUser(
     credentials: LoginCredentials,
   ): Promise<AuthenticatedUser> {
@@ -68,18 +44,25 @@ export class ExternalIdentityAxiosAdapter implements IExternalIdentityProvider {
         }),
       );
 
+      const userDataFromGo = response.data.user;
+
       const authenticatedUser: AuthenticatedUser = {
-        email: response.data.email,
+        email: credentials.email,
+        role: userDataFromGo.role,
       };
 
       return authenticatedUser;
     } catch (error: any) {
-      if (error.response?.status === 401 || error.response?.status === 404) {
+      if (
+        error.response?.status === 401 ||
+        error.response?.status === 400 ||
+        error.response?.status === 404
+      ) {
         throw new UnauthorizedException('Credenciales inválidas.');
       }
 
       this.logger.error(
-        `Error al contactar al sistema externo de usuarios: ${error.message}`,
+        `Error al contactar al sistema externo (Skopos-Admin): ${error.message}`,
       );
       throw new InternalServerErrorException(
         'El servicio de validación de identidad no está disponible en este momento.',

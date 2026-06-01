@@ -13,3 +13,5 @@ infra/ssl/nginx-selfsigned.crt
 # Angular / NestJS generales
 **/.angular/
 **/coverage/
+
+*.pem

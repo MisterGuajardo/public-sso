@@ -15,4 +15,6 @@ export type JwtPayload = {
    *
    * readonly allowedSystems?: string[];
    */
+
+  readonly role: string;
 };

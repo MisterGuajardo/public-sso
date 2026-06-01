@@ -15,4 +15,5 @@ export type AuthenticatedUser = {
    * Array defining which systems or applications the user is permitted to access.
    * readonly allowedSystems?: string[];
    */
+  readonly role: string;
 };
