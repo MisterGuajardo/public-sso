@@ -1,0 +1,147 @@
+name: SSO CI/CD Pipeline
+
+# Se ejecuta al hacer push a develop (Staging) o main (Producción), y en Pull Requests
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME_API: ${{ github.repository }}-api
+  IMAGE_NAME_WEB: ${{ github.repository }}-web
+
+jobs:
+  # ---------------------------------------------------------
+  # 1. INTEGRACIÓN CONTINUA (LINT & TEST)
+  # ---------------------------------------------------------
+  quality-checks:
+    name: Code Quality (Lint & Test)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: [sso-backend, sso-frontend]
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: './${{ matrix.project }}/package-lock.json'
+
+      - name: Install Dependencies
+        working-directory: ./${{ matrix.project }}
+        run: npm ci
+
+      - name: Run Linter
+        working-directory: ./${{ matrix.project }}
+        run: npm run lint
+
+      - name: Run Unit Tests
+        working-directory: ./${{ matrix.project }}
+        run: npm run test
+
+  # ---------------------------------------------------------
+  # 2. CONSTRUCCIÓN Y PUBLICACIÓN DE IMÁGENES DOCKER
+  # ---------------------------------------------------------
+  build-and-push:
+    name: Build & Push to GHCR
+    needs: quality-checks
+    runs-on: ubuntu-latest
+    # Solo construye si es un push a main o develop (no en PRs sueltos)
+    if: github.event_name == 'push' 
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Define etiquetas dinámicas (ej. 'latest' para main, 'staging' para develop)
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_API }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_WEB }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=staging,enable=${{ github.ref == 'refs/heads/develop' }}
+            type=sha,format=short
+
+      # Build Backend
+      - name: Build and Push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./sso-backend
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_API }}:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_API }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_API }}:buildcache,mode=max
+
+      # Build Frontend
+      - name: Build and Push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./sso-frontend
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_WEB }}:${{ github.ref_name == 'main' && 'latest' || 'staging' }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_WEB }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_WEB }}:buildcache,mode=max
+
+  # ---------------------------------------------------------
+  # 3. DESPLIEGUE CONTINUO (STAGING / PROD)
+  # ---------------------------------------------------------
+  deploy:
+    name: Deploy to Server
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Determine Environment
+        id: env-vars
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "ENV_NAME=production" >> $GITHUB_ENV
+            echo "SERVER_IP=${{ secrets.PROD_SERVER_IP }}" >> $GITHUB_ENV
+          else
+            echo "ENV_NAME=staging" >> $GITHUB_ENV
+            echo "SERVER_IP=${{ secrets.STAGING_SERVER_IP }}" >> $GITHUB_ENV
+          fi
+
+      - name: Execute Remote SSH Commands
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ env.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            # Entra a la carpeta de infraestructura
+            cd /opt/infra-sso-${{ env.ENV_NAME }}
+            
+            # Autentica el servidor contra GHCR
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            # Descarga las imágenes frescas generadas en el paso anterior
+            docker compose pull
+            
+            # Levanta los servicios, recreando solo los contenedores que cambiaron
+            docker compose up -d --remove-orphans
+            
+            # Limpia imágenes antiguas para no llenar el disco del servidor
+            docker image prune -f

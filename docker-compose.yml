@@ -1,0 +1,62 @@
+services:
+  # ----------------------------------------------------
+  # Frontend: Angular (Modo Desarrollo)
+  # ----------------------------------------------------
+  sso-web:
+    build:
+      context: ./frontend
+    networks:
+      - sso-network
+
+  # ----------------------------------------------------
+  # Backend: NestJS (Modo Desarrollo)
+  # ----------------------------------------------------
+  sso-api:
+    image: node:20-alpine
+    working_dir: /usr/src/app
+    command: sh -c "npm install && npm run start:dev"
+    volumes:
+      - ./backend:/usr/src/app
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      
+      # 1. CORS: Permitimos el propio SSO y las instancias de Skopos
+      - CORS_ORIGINS=https://sso.local,http://localhost:47134,https://skopos.local
+      
+      # 2. Conexión a Skopos: host.docker.internal permite al contenedor 
+      # llamar a una API que esté corriendo en tu localhost fuera de Docker.
+      - EXTERNAL_USER_SYSTEM_URL=http://host.docker.internal:47134/api/usuarios/validar
+      
+      # 3. Variables de entorno requeridas por app.joi.ts para firmar JWT
+      - JWT_PRIVATE_KEY=vE4O]DQ>k0R%J7oj9=w5Jx%<DZT2@U8g
+      - JWT_PUBLIC_KEY=Nu2+Fqa.33Es$(B&y2SzBb(Z2Rd;#tqr
+    
+    # Habilitamos la resolución de host.docker.internal para Linux/Windows
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - sso-network
+
+  # ----------------------------------------------------
+  # Proxy Inverso: Nginx (El Jefe)
+  # ----------------------------------------------------
+  nginx-proxy:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Inyectamos el archivo nginx.conf exacto de la Opción A
+      - ./infra/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Inyectamos las llaves RSA de OpenSSL generadas en el paso anterior
+      - ./infra/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - sso-web
+      - sso-api
+    networks:
+      - sso-network
+
+networks:
+  sso-network:
+    driver: bridge

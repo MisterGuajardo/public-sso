@@ -1,0 +1,15 @@
+# Dependencias
+**/node_modules/
+**/dist/
+
+# Archivos de Entorno
+**/.env
+**/.env.*
+
+# Infraestructura y Seguridad
+infra/ssl/nginx-selfsigned.key
+infra/ssl/nginx-selfsigned.crt
+
+# Angular / NestJS generales
+**/.angular/
+**/coverage/
